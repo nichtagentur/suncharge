@@ -152,7 +152,7 @@ function renderPvChart(hours) {
   const amberBar = hours.map(h => h.chargeable ? 0 : h.surplus);
   const pvLine = hours.map(h => h.pv);
   const baseLine = hours.map(() => CONFIG.baseLoadKw);
-  new Chart(document.getElementById("pvChart"), {
+  return new Chart(document.getElementById("pvChart"), {
     data: {
       labels,
       datasets: [
@@ -212,13 +212,45 @@ function timeOpts(yLabel) {
 }
 
 /* ---------- Boot ---------- */
+// Open-Meteo-Azimut: 0=Süd, -90=Ost, +90=West
+function aziLabel(a) {
+  if (a <= -75) return "Ost";
+  if (a < -15) return "Südost";
+  if (a <= 15) return "Süd";
+  if (a < 75) return "Südwest";
+  return "West";
+}
+
 function showConfig() {
   document.getElementById("config").innerHTML =
-    `<b>${CONFIG.kWp} kWp</b> · ${CONFIG.tilt}° Süd · Wallbox <b>${CONFIG.wallbox.maxKw} kW</b> 3-phasig<br>` +
+    `<b>${CONFIG.kWp} kWp</b> · Wallbox <b>${CONFIG.wallbox.maxKw} kW</b> 3-phasig<br>` +
     `Grundlast ${CONFIG.baseLoadKw} kW · ladbar ab ${CONFIG.wallbox.minKw} kW`;
 }
 
-const STATE = { hours: [], prices: [], priceChart: null };
+const STATE = { hours: [], prices: [], pvChart: null, priceChart: null };
+
+// PV neu laden, wenn Neigung/Ausrichtung geändert werden (GTI hängt davon ab)
+let reloadTimer = null;
+function scheduleReloadPv() {
+  document.getElementById("tiltVal").textContent = CONFIG.tilt + "°";
+  document.getElementById("aziVal").textContent = aziLabel(CONFIG.azimuth);
+  const status = document.getElementById("status");
+  status.className = "status";
+  status.textContent = "Aktualisiere PV-Forecast für " + CONFIG.tilt + "° " + aziLabel(CONFIG.azimuth) + "…";
+  clearTimeout(reloadTimer);
+  reloadTimer = setTimeout(async () => {
+    try {
+      STATE.hours = await fetchPv();
+      if (STATE.pvChart) STATE.pvChart.destroy();
+      STATE.pvChart = renderPvChart(STATE.hours);
+      recompute();
+      status.className = "status hide";
+    } catch (e) {
+      status.className = "status error";
+      status.textContent = "Fehler beim Aktualisieren: " + e.message;
+    }
+  }, 350);
+}
 
 // haengt nur vom Ladebedarf ab -> bei jeder Eingabe neu, ohne neue API-Calls
 function recompute() {
@@ -242,9 +274,13 @@ async function main() {
     TODAY0 = startOfDay(hours[0]?.time || new Date());
     STATE.hours = hours; STATE.prices = prices;
 
-    renderPvChart(hours);             // unabhaengig vom Bedarf -> nur einmal
+    STATE.pvChart = renderPvChart(hours);
     recompute();                      // Karten + Preis-Chart abhaengig vom Bedarf
     document.getElementById("need").addEventListener("input", recompute);
+
+    // Dachneigung / Ausrichtung -> PV neu laden
+    document.getElementById("tilt").addEventListener("input", e => { CONFIG.tilt = +e.target.value; scheduleReloadPv(); });
+    document.getElementById("azi").addEventListener("input", e => { CONFIG.azimuth = +e.target.value; scheduleReloadPv(); });
 
     status.classList.add("hide");
   } catch (e) {

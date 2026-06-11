@@ -20,6 +20,14 @@
       <label for="need">Ladebedarf
         <input id="need" type="number" min="1" max="200" step="1" value="40" /> kWh
       </label>
+      <div class="sliders">
+        <label for="tilt">Dachneigung <b id="tiltVal">30°</b>
+          <input id="tilt" type="range" min="0" max="90" step="5" value="30" />
+        </label>
+        <label for="azi">Ausrichtung <b id="aziVal">Süd</b>
+          <input id="azi" type="range" min="-90" max="90" step="15" value="0" />
+        </label>
+      </div>
       <div class="config" id="config"></div>
     </div>
   </header>
