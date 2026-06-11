@@ -22,4 +22,6 @@ Solar-ladbar nur wenn surplus ≥ 4.1 kW (11 kW Wallbox, 3-phasig, Minimum 6 A).
 - `index.html` / `app.js` / `styles.css` — alles statisch, Chart.js via CDN.
 
 ## Deploy
-`vercel+ deploy --yes --prod` → Aliased-URL teilen.
+Live auf **GitHub Pages**: https://nichtagentur.github.io/suncharge/
+(Vercel war am Deploy-Tag am Free-Tier-Limit 100/Tag — Pages als Fallback,
+statische Seite, `gh api .../pages`.) Update: `git push` → Pages baut automatisch.
