@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>SunCharge — Solar-Ladeberater Lanzenkirchen</title>
+  <title>Optimiere Eigenverbrauch Strom</title>
   <link rel="stylesheet" href="styles.css" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
 </head>
@@ -12,19 +12,24 @@
     <div class="brand">
       <span class="sun"></span>
       <div>
-        <h1>SunCharge</h1>
+        <h1>Optimiere Eigenverbrauch Strom</h1>
         <p class="sub" id="sub">E-Auto laden mit deiner Sonne &middot; <b id="subLoc">Lanzenkirchen</b></p>
       </div>
     </div>
   </header>
 
   <main>
-    <section class="panel">
-      <div class="panel-head">
-        <h2>Deine Anlage einstellen</h2>
-        <p class="panel-hint">Trag hier deinen Standort, die Anlagengr&ouml;&szlig;e, Dach und
-          Ladebedarf ein &mdash; die Empfehlungen unten aktualisieren sich sofort.</p>
-      </div>
+    <section class="lademenge">
+      <label for="need">Wie viel willst du laden?</label>
+      <div class="inp"><input id="need" type="number" min="1" max="200" step="1" value="40" inputmode="numeric" /><span class="unit">kWh</span></div>
+    </section>
+
+    <details class="panel" id="settings">
+      <summary>
+        <span class="sum-title">Anlage &amp; Tarif einstellen</span>
+        <span class="sum-hint">Standort, Gr&ouml;&szlig;e, Dach, Netztarif</span>
+        <span class="chev" aria-hidden="true"></span>
+      </summary>
       <div class="fields">
         <div class="field field-wide">
           <label for="place">Standort der PV-Anlage</label>
@@ -38,14 +43,14 @@
 
         <div class="field">
           <label for="kwp">Anlagengr&ouml;&szlig;e</label>
-          <div class="inp"><input id="kwp" type="number" min="1" max="100" step="0.5" value="12" /><span class="unit">kWp</span></div>
+          <div class="inp"><input id="kwp" type="number" min="1" max="100" step="0.5" value="12" inputmode="decimal" /><span class="unit">kWp</span></div>
           <small class="field-note">PV-Leistung</small>
         </div>
 
         <div class="field">
-          <label for="need">Ladebedarf</label>
-          <div class="inp"><input id="need" type="number" min="1" max="200" step="1" value="40" /><span class="unit">kWh</span></div>
-          <small class="field-note">pro Ladung</small>
+          <label for="tariff">Netztarif (Vergleich)</label>
+          <div class="inp"><input id="tariff" type="number" min="5" max="80" step="1" value="30" inputmode="numeric" /><span class="unit">ct/kWh</span></div>
+          <small class="field-note">dein normaler Strompreis</small>
         </div>
 
         <div class="field">
@@ -59,15 +64,9 @@
           <input id="azi" type="range" min="-90" max="90" step="15" value="0" />
           <small class="field-note">Ost &middot; S&uuml;d &middot; West</small>
         </div>
-
-        <div class="field">
-          <label for="tariff">Netztarif (Vergleich)</label>
-          <div class="inp"><input id="tariff" type="number" min="5" max="80" step="1" value="30" /><span class="unit">ct/kWh</span></div>
-          <small class="field-note">dein normaler Strompreis</small>
-        </div>
       </div>
       <div class="config" id="config"></div>
-    </section>
+    </details>
 
     <section id="status" class="status">Lade Wetter- und Preisdaten&hellip;</section>
 
@@ -76,7 +75,6 @@
       <p class="hint">Aus echter PV-Prognose (Open-Meteo) berechneter Solar-&Uuml;berschuss
         nach Abzug der Hausgrundlast. &bdquo;Quasi-gratis&ldquo; = Eigenverbrauch (du verzichtest
         nur auf die geringe Einspeiseverg&uuml;tung). Tag&nbsp;3 ist Prognose-unsicher.</p>
-      <div id="savings" class="savings" hidden></div>
       <div id="solarSummary" class="summary"></div>
       <div id="cards" class="cards"></div>
     </section>
@@ -99,6 +97,8 @@
       <div class="chart-wrap"><canvas id="priceChart"></canvas></div>
       <div id="priceCards" class="cards"></div>
     </section>
+
+    <div id="savings" class="savings" hidden></div>
   </main>
 
   <footer>

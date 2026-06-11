@@ -1,4 +1,5 @@
-# SunCharge — Solar-EV-Ladeberater
+# Optimiere Eigenverbrauch Strom — Solar-EV-Ladeberater
+(vormals "SunCharge")
 
 Client-seitige Single-Page-Web-App: empfiehlt für eine 10 kWp PV-Anlage in
 Lanzenkirchen (47.70°N, 16.18°E), wann/mit wie viel kW man das E-Auto quasi-gratis
