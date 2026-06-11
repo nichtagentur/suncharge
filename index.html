@@ -13,33 +13,70 @@
       <span class="sun"></span>
       <div>
         <h1>SunCharge</h1>
-        <p class="sub">E-Auto laden mit deiner Sonne &middot; Lanzenkirchen, 10&nbsp;kWp</p>
+        <p class="sub" id="sub">E-Auto laden mit deiner Sonne &middot; <b id="subLoc">Lanzenkirchen</b></p>
       </div>
-    </div>
-    <div class="controls">
-      <label for="need">Ladebedarf
-        <input id="need" type="number" min="1" max="200" step="1" value="40" /> kWh
-      </label>
-      <div class="sliders">
-        <label for="tilt">Dachneigung <b id="tiltVal">30°</b>
-          <input id="tilt" type="range" min="0" max="90" step="5" value="30" />
-        </label>
-        <label for="azi">Ausrichtung <b id="aziVal">Süd</b>
-          <input id="azi" type="range" min="-90" max="90" step="15" value="0" />
-        </label>
-      </div>
-      <div class="config" id="config"></div>
     </div>
   </header>
 
   <main>
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Deine Anlage einstellen</h2>
+        <p class="panel-hint">Trag hier deinen Standort, die Anlagengr&ouml;&szlig;e, Dach und
+          Ladebedarf ein &mdash; die Empfehlungen unten aktualisieren sich sofort.</p>
+      </div>
+      <div class="fields">
+        <div class="field field-wide">
+          <label for="place">Standort der PV-Anlage</label>
+          <div class="ac-wrap">
+            <input id="place" type="text" autocomplete="off" placeholder="Ort eingeben&hellip;"
+                   value="Lanzenkirchen, Nieder&ouml;sterreich" />
+            <div id="placeResults" class="ac-list" hidden></div>
+          </div>
+          <small id="placeMeta" class="field-note">47.736, 16.220</small>
+        </div>
+
+        <div class="field">
+          <label for="kwp">Anlagengr&ouml;&szlig;e</label>
+          <div class="inp"><input id="kwp" type="number" min="1" max="100" step="0.5" value="12" /><span class="unit">kWp</span></div>
+          <small class="field-note">PV-Leistung</small>
+        </div>
+
+        <div class="field">
+          <label for="need">Ladebedarf</label>
+          <div class="inp"><input id="need" type="number" min="1" max="200" step="1" value="40" /><span class="unit">kWh</span></div>
+          <small class="field-note">pro Ladung</small>
+        </div>
+
+        <div class="field">
+          <label for="tilt">Dachneigung <b id="tiltVal">30&deg;</b></label>
+          <input id="tilt" type="range" min="0" max="90" step="5" value="30" />
+          <small class="field-note">0&deg; flach &middot; 90&deg; senkrecht</small>
+        </div>
+
+        <div class="field">
+          <label for="azi">Ausrichtung <b id="aziVal">S&uuml;d</b></label>
+          <input id="azi" type="range" min="-90" max="90" step="15" value="0" />
+          <small class="field-note">Ost &middot; S&uuml;d &middot; West</small>
+        </div>
+
+        <div class="field">
+          <label for="tariff">Netztarif (Vergleich)</label>
+          <div class="inp"><input id="tariff" type="number" min="5" max="80" step="1" value="30" /><span class="unit">ct/kWh</span></div>
+          <small class="field-note">dein normaler Strompreis</small>
+        </div>
+      </div>
+      <div class="config" id="config"></div>
+    </section>
+
     <section id="status" class="status">Lade Wetter- und Preisdaten&hellip;</section>
 
     <section class="block">
       <h2>Empfehlung: wann &amp; mit wie viel kW laden</h2>
-      <p class="hint">Aus echtem PV-Forecast (Open-Meteo) berechneter Solar-&Uuml;berschuss
+      <p class="hint">Aus echter PV-Prognose (Open-Meteo) berechneter Solar-&Uuml;berschuss
         nach Abzug der Hausgrundlast. &bdquo;Quasi-gratis&ldquo; = Eigenverbrauch (du verzichtest
         nur auf die geringe Einspeiseverg&uuml;tung). Tag&nbsp;3 ist Prognose-unsicher.</p>
+      <div id="savings" class="savings" hidden></div>
       <div id="solarSummary" class="summary"></div>
       <div id="cards" class="cards"></div>
     </section>
@@ -58,14 +95,16 @@
       <p class="hint">Dynamischer B&ouml;rsen-Spotpreis (aWATTar/EPEX), nur
         <strong>heute &amp; morgen</strong> verf&uuml;gbar &mdash; nur die Energiekomponente,
         ohne Netz/Steuern. F&uuml;r &uuml;bermorgen gibt es noch keine Preise.</p>
+      <div id="exaa" class="exaa" hidden></div>
       <div class="chart-wrap"><canvas id="priceChart"></canvas></div>
       <div id="priceCards" class="cards"></div>
     </section>
   </main>
 
   <footer>
-    Daten: Open-Meteo (PV-Forecast) &amp; aWATTar (Spotpreis) &middot; kein Gewähr,
-    Prognose. Ladeleistung in kW, Energiemenge in kWh.
+    Daten: Open-Meteo (PV-Prognose), aWATTar/EPEX (Spotpreis) &amp; EXAA (offizielle
+    österreichische Strombörse) &middot; ohne Gewähr, Prognosewerte.
+    Ladeleistung in kW, Energiemenge in kWh.
   </footer>
 
   <script src="app.js"></script>

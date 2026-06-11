@@ -1,28 +1,35 @@
 "use strict";
 
-/* ---------- Konfiguration (Lanzenkirchen, Burgenland) ---------- */
+/* ---------- Konfiguration (Standard: Lanzenkirchen) ---------- */
 const CONFIG = {
-  lat: 47.70, lon: 16.18,
+  lat: 47.736, lon: 16.220, locName: "Lanzenkirchen",
   tz: "Europe/Vienna",
-  kWp: 10,            // PV-Anlagengroesse
-  tilt: 30,           // Dachneigung (Grad) — Standardannahme
-  azimuth: 0,         // 0 = Sued (Open-Meteo-Konvention)
-  pr: 0.85,           // Performance Ratio (Verluste Wechselrichter/Kabel/Temp)
+  kWp: 12,            // PV-Anlagengroesse (Eingabefeld)
+  tilt: 30,           // Dachneigung (Grad) — Slider
+  azimuth: 0,         // 0 = Sued (Open-Meteo-Konvention) — Slider
+  pr: 0.85,           // Performance Ratio
   baseLoadKw: 0.5,    // pauschale Hausgrundlast
   wallbox: { phases: 3, minKw: 4.1, maxKw: 11 }, // 11 kW 3-phasig, Minimum 6 A
-  defaultNeedKwh: 40  // Vorgabe Ladebedarf (im UI ueberschreibbar)
+  defaultNeedKwh: 40, // Vorgabe Ladebedarf
+  refTariffCt: 30,    // normaler Netztarif zum Vergleich (all-in, ct/kWh)
+  feedInCt: 8         // entgangene Einspeiseverguetung (Opportunitaetskosten)
 };
-
-/* aktueller Ladebedarf aus dem Eingabefeld */
-function getNeedKwh() {
-  const v = parseFloat(document.getElementById("need").value);
-  return Number.isFinite(v) && v > 0 ? Math.min(200, v) : CONFIG.defaultNeedKwh;
-}
 
 const DAY_LABEL = ["Heute", "Morgen", "Übermorgen"];
 
+/* ---------- Eingaben ---------- */
+const $ = id => document.getElementById(id);
+function numInput(id, fallback, max) {
+  const v = parseFloat($(id).value);
+  return Number.isFinite(v) && v > 0 ? Math.min(max, v) : fallback;
+}
+const getNeedKwh = () => numInput("need", CONFIG.defaultNeedKwh, 200);
+const getKwp     = () => numInput("kwp", CONFIG.kWp, 100);
+const getTariff  = () => numInput("tariff", CONFIG.refTariffCt, 80);
+
 /* ---------- Datenquellen ---------- */
-async function fetchPv() {
+// liefert die ROHEN Stunden (nur Einstrahlung) — kWp wird erst beim Ableiten angewandt
+async function fetchPvRaw() {
   const u = new URL("https://api.open-meteo.com/v1/forecast");
   u.search = new URLSearchParams({
     latitude: CONFIG.lat, longitude: CONFIG.lon,
@@ -36,19 +43,43 @@ async function fetchPv() {
   const h = j.hourly;
   if (!h || !Array.isArray(h.time) || !Array.isArray(h.global_tilted_irradiance))
     throw new Error("Open-Meteo: unerwartetes Format");
-  return h.time.map((t, i) => {
-    const gti = h.global_tilted_irradiance[i] ?? 0;        // W/m^2
-    const pv = Math.min(CONFIG.kWp, (gti / 1000) * CONFIG.kWp * CONFIG.pr); // kW
-    const surplus = Math.max(0, pv - CONFIG.baseLoadKw);   // kW
+  return h.time.map((t, i) => ({
+    time: new Date(t),
+    gti: h.global_tilted_irradiance[i] ?? 0,   // W/m^2
+    cloud: h.cloud_cover ? h.cloud_cover[i] : null
+  }));
+}
+
+// wendet kWp, Grundlast und Wallbox-Grenzen an (rein lokal, kein API-Call)
+function derive(raw) {
+  const kWp = getKwp();
+  return raw.map(h => {
+    const pv = Math.min(kWp, (h.gti / 1000) * kWp * CONFIG.pr); // kW
+    const surplus = Math.max(0, pv - CONFIG.baseLoadKw);        // kW
     const chargeable = surplus >= CONFIG.wallbox.minKw;
     const chargeKw = chargeable ? Math.min(surplus, CONFIG.wallbox.maxKw) : 0;
-    return {
-      time: new Date(t), label: t,
-      pv: round1(pv), surplus: round1(surplus),
-      chargeable, chargeKw: round1(chargeKw),
-      cloud: h.cloud_cover ? h.cloud_cover[i] : null
-    };
+    return { time: h.time, pv: round1(pv), surplus: round1(surplus), chargeable, chargeKw: round1(chargeKw) };
   });
+}
+
+// Offizielle oesterreichische Strompreisboerse EXAA (Day-Ahead, Markt AT)
+// ueber eigenen CORS-Proxy-Worker, da EXAA keine CORS-Header sendet.
+const PROXY = "https://suncharge-proxy.nichtagentur.workers.dev";
+async function fetchExaa() {
+  const r = await fetch(`${PROXY}/exaa`);
+  if (!r.ok) throw new Error("EXAA HTTP " + r.status);
+  const j = await r.json();
+  const at = j.AT;
+  if (!at || !Array.isArray(at.price) || !at.price.length) throw new Error("EXAA: keine AT-Daten");
+  const hours = at.price.map(p => ({ hour: p.x - 1, ct: p.y / 10 })); // EUR/MWh -> ct/kWh
+  const cts = hours.map(h => h.ct);
+  const min = hours.reduce((a, b) => b.ct < a.ct ? b : a);
+  const max = hours.reduce((a, b) => b.ct > a.ct ? b : a);
+  return {
+    day: at.auctionDay,
+    avg: cts.reduce((s, c) => s + c, 0) / cts.length,
+    min, max
+  };
 }
 
 async function fetchPrices() {
@@ -58,17 +89,12 @@ async function fetchPrices() {
   if (!Array.isArray(j.data)) throw new Error("aWATTar: unerwartetes Format");
   return j.data
     .filter(d => typeof d.marketprice === "number")
-    .map(d => ({
-      time: new Date(d.start_timestamp),
-      ct: d.marketprice / 10           // EUR/MWh -> ct/kWh
-    }));
+    .map(d => ({ time: new Date(d.start_timestamp), ct: d.marketprice / 10 })); // EUR/MWh -> ct/kWh
 }
 
-/* ---------- Empfehlungs-Logik ---------- */
-// zusammenhaengende solar-ladbare Stunden zu Fenstern gruppieren
+/* ---------- Logik ---------- */
 function buildSolarWindows(hours) {
-  const win = [];
-  let cur = null;
+  const win = []; let cur = null;
   for (const h of hours) {
     if (h.chargeable) {
       if (!cur) cur = { start: h.time, hours: [] };
@@ -79,13 +105,13 @@ function buildSolarWindows(hours) {
   if (cur) win.push(cur);
   return win.map(w => {
     const kwh = w.hours.reduce((s, h) => s + h.chargeKw, 0);
-    const avg = kwh / w.hours.length;
-    const peak = Math.max(...w.hours.map(h => h.chargeKw));
-    return { start: w.start, end: w.end, hours: w.hours.length, kwh: round1(kwh), avgKw: round1(avg), peakKw: round1(peak) };
+    return {
+      start: w.start, end: w.end, hours: w.hours.length, kwh: round1(kwh),
+      avgKw: round1(kwh / w.hours.length), peakKw: round1(Math.max(...w.hours.map(h => h.chargeKw)))
+    };
   });
 }
 
-// guenstigstes N-Stunden-Fenster im Spotpreis (Sliding-Window)
 function cheapestPriceWindow(prices, n) {
   if (prices.length < n) return null;
   let best = null;
@@ -106,10 +132,27 @@ let TODAY0;
 function dayIndex(d) { return Math.round((startOfDay(d) - TODAY0) / 86400e3); }
 
 /* ---------- Rendering ---------- */
+function renderSavings(totalSolar, need) {
+  const el = $("savings");
+  const used = Math.min(need, totalSolar);          // kWh, die du aus Solar deckst
+  if (used <= 0) { el.hidden = true; return; }
+  const tariff = getTariff();
+  const savedGross = used * tariff / 100;           // vermiedener Netzbezug (EUR)
+  const savedNet = used * (tariff - CONFIG.feedInCt) / 100;
+  const rest = round1(Math.max(0, need - totalSolar));
+  el.hidden = false;
+  el.innerHTML =
+    `<span class="amount">~${savedGross.toFixed(2)} €</span>
+     <span class="label">gespart ggü. Netzbezug (${tariff} ct/kWh) — für ${round1(used)} kWh aus eigener Sonne</span>
+     <span class="note">Netto ~${savedNet.toFixed(2)} € nach entgangener Einspeisung (${CONFIG.feedInCt} ct/kWh).` +
+    (rest > 0 ? ` Die restlichen ${rest} kWh am besten im günstigsten Netz-Fenster unten laden.` : ` Dein ganzer Bedarf ist solar gedeckt.`) +
+    `</span>`;
+}
+
 function renderSolarCards(windows, need) {
-  const el = document.getElementById("cards");
-  const sum = document.getElementById("solarSummary");
+  const el = $("cards"), sum = $("solarSummary");
   const totalSolar = round1(windows.reduce((s, w) => s + w.kwh, 0));
+  renderSavings(totalSolar, need);
 
   if (!windows.length) {
     sum.className = "summary short";
@@ -132,7 +175,7 @@ function renderSolarCards(windows, need) {
   let cum = 0, reached = false;
   el.innerHTML = windows.map(w => {
     const di = dayIndex(w.start);
-    const before = cum; cum += w.kwh;
+    cum += w.kwh;
     const justReached = !reached && cum >= need;
     if (justReached) reached = true;
     const unsure = di >= 2 ? `<span class="badge unsure">Tag&nbsp;3 — unsicher</span>` : "";
@@ -141,25 +184,21 @@ function renderSolarCards(windows, need) {
       <span class="badge free">quasi-gratis · Solar</span>${reach}${unsure}
       <div class="when">${fmtDay(w.start)}, ${fmtH(w.start)}–${fmtH(w.end)}</div>
       <div class="big">${w.avgKw}<small> kW ⌀ (bis ${w.peakKw} kW)</small></div>
-      <div class="meta">${w.hours}&nbsp;h · ca. <b>${w.kwh}&nbsp;kWh</b> Solar · kumuliert ${round1(Math.min(cum, before + w.kwh))}&nbsp;kWh</div>
+      <div class="meta">${w.hours}&nbsp;h · ca. <b>${w.kwh}&nbsp;kWh</b> Solar · kumuliert ${round1(cum)}&nbsp;kWh</div>
     </div>`;
   }).join("");
 }
 
 function renderPvChart(hours) {
   const labels = hours.map(h => h.time);
-  const greenBar = hours.map(h => h.chargeable ? h.surplus : 0);
-  const amberBar = hours.map(h => h.chargeable ? 0 : h.surplus);
-  const pvLine = hours.map(h => h.pv);
-  const baseLine = hours.map(() => CONFIG.baseLoadKw);
-  return new Chart(document.getElementById("pvChart"), {
+  return new Chart($("pvChart"), {
     data: {
       labels,
       datasets: [
-        { type: "bar", label: "solar-ladbar (kW)", data: greenBar, backgroundColor: "#21a25b", stack: "s", order: 3, barPercentage: 1, categoryPercentage: 1 },
-        { type: "bar", label: "Überschuss zu klein (kW)", data: amberBar, backgroundColor: "#e8a33d", stack: "s", order: 3, barPercentage: 1, categoryPercentage: 1 },
-        { type: "line", label: "PV-Produktion (kW)", data: pvLine, borderColor: "#c2880a", backgroundColor: "transparent", borderWidth: 2, pointRadius: 0, tension: .35, order: 1 },
-        { type: "line", label: "Hausgrundlast (kW)", data: baseLine, borderColor: "#9aa7b5", borderDash: [5, 4], borderWidth: 1.5, pointRadius: 0, order: 2 }
+        { type: "bar", label: "solar-ladbar (kW)", data: hours.map(h => h.chargeable ? h.surplus : 0), backgroundColor: "#21a25b", stack: "s", order: 3, barPercentage: 1, categoryPercentage: 1 },
+        { type: "bar", label: "Überschuss zu klein (kW)", data: hours.map(h => h.chargeable ? 0 : h.surplus), backgroundColor: "#e8a33d", stack: "s", order: 3, barPercentage: 1, categoryPercentage: 1 },
+        { type: "line", label: "PV-Produktion (kW)", data: hours.map(h => h.pv), borderColor: "#c2880a", backgroundColor: "transparent", borderWidth: 2, pointRadius: 0, tension: .35, order: 1 },
+        { type: "line", label: "Hausgrundlast (kW)", data: hours.map(() => CONFIG.baseLoadKw), borderColor: "#9aa7b5", borderDash: [5, 4], borderWidth: 1.5, pointRadius: 0, order: 2 }
       ]
     },
     options: timeOpts("kW")
@@ -168,12 +207,12 @@ function renderPvChart(hours) {
 
 function renderPriceChart(prices, cheapWin) {
   if (!prices.length) {
-    document.getElementById("priceChart").parentElement.innerHTML =
+    $("priceChart").parentElement.innerHTML =
       `<p class="hint">Aktuell keine Spotpreise verfügbar (Tagespreise erscheinen ~13:00 für morgen).</p>`;
     return null;
   }
   const colors = prices.map(p => (cheapWin && p.time >= cheapWin.start && p.time < cheapWin.end) ? "#2f6df0" : "#bcd0f7");
-  return new Chart(document.getElementById("priceChart"), {
+  return new Chart($("priceChart"), {
     type: "bar",
     data: { labels: prices.map(p => p.time), datasets: [
       { label: "Spotpreis (ct/kWh)", data: prices.map(p => round1(p.ct)), backgroundColor: colors, barPercentage: 1, categoryPercentage: .92 }
@@ -182,17 +221,31 @@ function renderPriceChart(prices, cheapWin) {
   });
 }
 
+function renderExaa(d) {
+  const el = $("exaa");
+  if (!el) return;
+  if (!d) { el.hidden = true; return; }
+  const hh = h => String(h).padStart(2, "0");
+  el.hidden = false;
+  el.innerHTML =
+    `<span class="ex-title"><span class="ex-flag">AT</span> Offizielle österreichische Strombörse (EXAA) · Day-Ahead-Auktion</span>
+     <span class="ex-val">Durchschnitt: <b>${round1(d.avg)} ct/kWh</b></span>
+     <span class="ex-val">Günstigste Stunde: <b>${hh(d.min.hour)}–${hh(d.min.hour + 1)} Uhr</b> (${round1(d.min.ct)} ct)</span>
+     <span class="ex-val">Teuerste: <b>${round1(d.max.ct)} ct</b></span>
+     <span class="ex-note">Amtliche Day-Ahead-Auktion der Energy Exchange Austria für Liefertag ${d.day} (Marktgebiet AT) — als offizielle Referenz zum dynamischen Spotpreis darüber.</span>`;
+}
+
 function renderPriceCard(cheapWin, need) {
-  const el = document.getElementById("priceCards");
+  const el = $("priceCards");
   if (!cheapWin) { el.innerHTML = ""; return; }
-  const cost = (cheapWin.avg / 100) * need; // EUR fuer den Bedarf
+  const cost = (cheapWin.avg / 100) * need;
   const h = Math.round((cheapWin.end - cheapWin.start) / 3600e3);
   el.innerHTML = `<div class="card grid">
     <span class="badge cheap">günstigster Netzstrom</span>
     <div class="when">${fmtDay(cheapWin.start)}, ${fmtH(cheapWin.start)}–${fmtH(cheapWin.end)}</div>
     <div class="big">${round1(cheapWin.avg)}<small> ct/kWh ⌀</small></div>
     <div class="meta">${need}&nbsp;kWh laden ≈ <b>${cost.toFixed(2)}&nbsp;€</b> Energiekosten
-    (ohne Netz/Steuern) — günstigstes ${h}-h-Fenster für ${need}&nbsp;kWh bei ${CONFIG.wallbox.maxKw}&nbsp;kW.</div>
+    (ohne Netz/Steuern) — günstigstes ${h}-h-Fenster bei ${CONFIG.wallbox.maxKw}&nbsp;kW.</div>
   </div>`;
 }
 
@@ -211,8 +264,43 @@ function timeOpts(yLabel) {
   };
 }
 
+/* ---------- Standort-Autocomplete (Open-Meteo Geocoding, keyless) ---------- */
+let geoTimer = null;
+function wireGeocoder() {
+  const inp = $("place"), list = $("placeResults");
+  inp.addEventListener("input", () => {
+    clearTimeout(geoTimer);
+    const q = inp.value.trim();
+    if (q.length < 2) { list.hidden = true; return; }
+    geoTimer = setTimeout(async () => {
+      try {
+        const u = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q)}&count=6&language=de`;
+        const j = await (await fetch(u)).json();
+        const res = j.results || [];
+        if (!res.length) { list.hidden = true; return; }
+        list.innerHTML = res.map((r, i) =>
+          `<div class="ac-item" data-i="${i}">
+             <div class="ac-name">${r.name}</div>
+             <div class="ac-sub">${[r.admin1, r.country].filter(Boolean).join(", ")}</div>
+           </div>`).join("");
+        list.hidden = false;
+        list.querySelectorAll(".ac-item").forEach(it =>
+          it.addEventListener("mousedown", e => { e.preventDefault(); pickPlace(res[+it.dataset.i]); }));
+      } catch { list.hidden = true; }
+    }, 250);
+  });
+  inp.addEventListener("blur", () => setTimeout(() => list.hidden = true, 150));
+}
+function pickPlace(r) {
+  CONFIG.lat = r.latitude; CONFIG.lon = r.longitude; CONFIG.locName = r.name;
+  $("place").value = [r.name, r.admin1].filter(Boolean).join(", ");
+  $("placeResults").hidden = true;
+  $("placeMeta").textContent = `${r.latitude.toFixed(3)}, ${r.longitude.toFixed(3)}`;
+  $("subLoc").textContent = r.name;
+  scheduleReloadPv();
+}
+
 /* ---------- Boot ---------- */
-// Open-Meteo-Azimut: 0=Süd, -90=Ost, +90=West
 function aziLabel(a) {
   if (a <= -75) return "Ost";
   if (a < -15) return "Südost";
@@ -220,42 +308,21 @@ function aziLabel(a) {
   if (a < 75) return "Südwest";
   return "West";
 }
-
 function showConfig() {
-  document.getElementById("config").innerHTML =
-    `<b>${CONFIG.kWp} kWp</b> · Wallbox <b>${CONFIG.wallbox.maxKw} kW</b> 3-phasig<br>` +
-    `Grundlast ${CONFIG.baseLoadKw} kW · ladbar ab ${CONFIG.wallbox.minKw} kW`;
+  $("config").innerHTML =
+    `Wallbox <b>${CONFIG.wallbox.maxKw} kW</b> 3-phasig · ladbar ab ${CONFIG.wallbox.minKw} kW · ` +
+    `Hausgrundlast ${CONFIG.baseLoadKw} kW · Systemwirkungsgrad ${String(CONFIG.pr).replace(".", ",")}`;
 }
 
-const STATE = { hours: [], prices: [], pvChart: null, priceChart: null };
+const STATE = { raw: [], prices: [], pvChart: null, priceChart: null };
 
-// PV neu laden, wenn Neigung/Ausrichtung geändert werden (GTI hängt davon ab)
-let reloadTimer = null;
-function scheduleReloadPv() {
-  document.getElementById("tiltVal").textContent = CONFIG.tilt + "°";
-  document.getElementById("aziVal").textContent = aziLabel(CONFIG.azimuth);
-  const status = document.getElementById("status");
-  status.className = "status";
-  status.textContent = "Aktualisiere PV-Forecast für " + CONFIG.tilt + "° " + aziLabel(CONFIG.azimuth) + "…";
-  clearTimeout(reloadTimer);
-  reloadTimer = setTimeout(async () => {
-    try {
-      STATE.hours = await fetchPv();
-      if (STATE.pvChart) STATE.pvChart.destroy();
-      STATE.pvChart = renderPvChart(STATE.hours);
-      recompute();
-      status.className = "status hide";
-    } catch (e) {
-      status.className = "status error";
-      status.textContent = "Fehler beim Aktualisieren: " + e.message;
-    }
-  }, 350);
-}
-
-// haengt nur vom Ladebedarf ab -> bei jeder Eingabe neu, ohne neue API-Calls
+// haengt nur von kWp/Bedarf/Tarif ab -> ohne neue API-Calls
 function recompute() {
   const need = getNeedKwh();
-  renderSolarCards(buildSolarWindows(STATE.hours), need);
+  const hours = derive(STATE.raw);
+  if (STATE.pvChart) STATE.pvChart.destroy();
+  STATE.pvChart = renderPvChart(hours);
+  renderSolarCards(buildSolarWindows(hours), need);
 
   if (STATE.prices.length) {
     const n = Math.max(1, Math.min(STATE.prices.length, Math.ceil(need / CONFIG.wallbox.maxKw)));
@@ -266,23 +333,49 @@ function recompute() {
   }
 }
 
+// PV neu laden, wenn Standort/Neigung/Ausrichtung sich aendern (GTI haengt davon ab)
+let reloadTimer = null;
+function scheduleReloadPv() {
+  $("tiltVal").textContent = CONFIG.tilt + "°";
+  $("aziVal").textContent = aziLabel(CONFIG.azimuth);
+  const status = $("status");
+  status.className = "status";
+  status.textContent = `Aktualisiere PV-Prognose für ${CONFIG.locName} (${CONFIG.tilt}° ${aziLabel(CONFIG.azimuth)})…`;
+  clearTimeout(reloadTimer);
+  reloadTimer = setTimeout(async () => {
+    try {
+      STATE.raw = await fetchPvRaw();
+      TODAY0 = startOfDay(STATE.raw[0]?.time || new Date());
+      recompute();
+      status.className = "status hide";
+    } catch (e) {
+      status.className = "status error";
+      status.textContent = "Fehler beim Aktualisieren: " + e.message;
+    }
+  }, 350);
+}
+
 async function main() {
   showConfig();
-  const status = document.getElementById("status");
+  wireGeocoder();
+  const status = $("status");
   try {
-    const [hours, prices] = await Promise.all([fetchPv(), fetchPrices()]);
-    TODAY0 = startOfDay(hours[0]?.time || new Date());
-    STATE.hours = hours; STATE.prices = prices;
-
-    STATE.pvChart = renderPvChart(hours);
-    recompute();                      // Karten + Preis-Chart abhaengig vom Bedarf
-    document.getElementById("need").addEventListener("input", recompute);
-
-    // Dachneigung / Ausrichtung -> PV neu laden
-    document.getElementById("tilt").addEventListener("input", e => { CONFIG.tilt = +e.target.value; scheduleReloadPv(); });
-    document.getElementById("azi").addEventListener("input", e => { CONFIG.azimuth = +e.target.value; scheduleReloadPv(); });
-
+    const [raw, prices] = await Promise.all([fetchPvRaw(), fetchPrices()]);
+    TODAY0 = startOfDay(raw[0]?.time || new Date());
+    STATE.raw = raw; STATE.prices = prices;
+    recompute();
     status.classList.add("hide");
+
+    // Offizielle AT-Boerse EXAA separat laden (nicht kritisch fuer die App)
+    fetchExaa().then(renderExaa).catch(e => { console.warn("EXAA:", e.message); renderExaa(null); });
+
+    // lokale Eingaben -> nur neu rechnen
+    $("need").addEventListener("input", recompute);
+    $("kwp").addEventListener("input", recompute);
+    $("tariff").addEventListener("input", recompute);
+    // Standort/Dach -> PV neu laden
+    $("tilt").addEventListener("input", e => { CONFIG.tilt = +e.target.value; scheduleReloadPv(); });
+    $("azi").addEventListener("input", e => { CONFIG.azimuth = +e.target.value; scheduleReloadPv(); });
   } catch (e) {
     status.textContent = "Fehler beim Laden der Daten: " + e.message;
     status.classList.add("error");
