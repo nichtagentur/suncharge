@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SunCharge — Solar-Ladeberater Lanzenkirchen</title>
+  <link rel="stylesheet" href="styles.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <span class="sun"></span>
+      <div>
+        <h1>SunCharge</h1>
+        <p class="sub">E-Auto laden mit deiner Sonne &middot; Lanzenkirchen, 10&nbsp;kWp</p>
+      </div>
+    </div>
+    <div class="controls">
+      <label for="need">Ladebedarf
+        <input id="need" type="number" min="1" max="200" step="1" value="40" /> kWh
+      </label>
+      <div class="config" id="config"></div>
+    </div>
+  </header>
+
+  <main>
+    <section id="status" class="status">Lade Wetter- und Preisdaten&hellip;</section>
+
+    <section class="block">
+      <h2>Empfehlung: wann &amp; mit wie viel kW laden</h2>
+      <p class="hint">Aus echtem PV-Forecast (Open-Meteo) berechneter Solar-&Uuml;berschuss
+        nach Abzug der Hausgrundlast. &bdquo;Quasi-gratis&ldquo; = Eigenverbrauch (du verzichtest
+        nur auf die geringe Einspeiseverg&uuml;tung). Tag&nbsp;3 ist Prognose-unsicher.</p>
+      <div id="solarSummary" class="summary"></div>
+      <div id="cards" class="cards"></div>
+    </section>
+
+    <section class="block">
+      <h2>3-Tage-Verlauf: PV-Produktion &amp; ladbarer &Uuml;berschuss</h2>
+      <p class="hint"><span class="leg leg-green"></span> solar-ladbar (&ge;&nbsp;4,1&nbsp;kW)
+        &nbsp; <span class="leg leg-amber"></span> &Uuml;berschuss zu klein f&uuml;rs Laden
+        &nbsp; <span class="leg leg-line"></span> PV-Produktion
+        &nbsp; <span class="leg leg-base"></span> Hausgrundlast</p>
+      <div class="chart-wrap"><canvas id="pvChart"></canvas></div>
+    </section>
+
+    <section class="block">
+      <h2>Wenn die Sonne nicht reicht: g&uuml;nstigster Netzstrom</h2>
+      <p class="hint">Dynamischer B&ouml;rsen-Spotpreis (aWATTar/EPEX), nur
+        <strong>heute &amp; morgen</strong> verf&uuml;gbar &mdash; nur die Energiekomponente,
+        ohne Netz/Steuern. F&uuml;r &uuml;bermorgen gibt es noch keine Preise.</p>
+      <div class="chart-wrap"><canvas id="priceChart"></canvas></div>
+      <div id="priceCards" class="cards"></div>
+    </section>
+  </main>
+
+  <footer>
+    Daten: Open-Meteo (PV-Forecast) &amp; aWATTar (Spotpreis) &middot; kein Gewähr,
+    Prognose. Ladeleistung in kW, Energiemenge in kWh.
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
